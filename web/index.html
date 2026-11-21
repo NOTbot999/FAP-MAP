@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="sl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>Franc Map</title>
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div id="app">
+    <header id="topbar">
+      <div class="brand"><span class="logo">F</span><span class="brand-name">Franc Map</span></div>
+      <div id="search" class="search">
+        <span class="search-icon" data-icon="search"></span>
+        <input id="search-input" type="text" autocomplete="off" spellcheck="false"
+               placeholder="Išči kraj, naslov, točko ali koordinate…  (Ctrl+K)">
+        <kbd>Ctrl K</kbd>
+        <div id="search-results" class="dropdown hidden"></div>
+      </div>
+      <div class="top-actions">
+        <button id="net-badge" class="badge" title="Preklopi način brez povezave"></button>
+        <button id="theme-btn" class="icon-btn" title="Svetla / temna tema" data-icon="moon"></button>
+      </div>
+    </header>
+
+
+    <aside id="panel" class="hidden">
+      <div class="panel-head">
+        <h2 id="panel-title"></h2>
+        <button class="icon-btn" id="panel-close" title="Zapri (Esc)" data-icon="x"></button>
+      </div>
+      <div id="panel-body"></div>
+    </aside>
+
+    <main id="map-wrap">
+      <div id="map"></div>
+      <div id="tool-hint" class="tool-hint hidden"></div>
+      <div id="tool-actions" class="tool-actions hidden"></div>
+      <div id="compare-slider" class="hidden"><div class="handle"><i data-icon="columns"></i></div></div>
+      <div class="map-buttons">
+        <button class="map-btn" id="btn-locate" title="Moja lokacija" data-icon="locate"></button>
+        <button class="map-btn" id="btn-home" title="Celotna Slovenija" data-icon="home"></button>
+      </div>
+      <section id="profile" class="hidden">
+        <div class="profile-head">
+          <strong id="profile-title">Višinski profil</strong>
+          <span id="profile-stats"></span>
+          <button class="icon-btn" id="profile-close" data-icon="x" title="Zapri"></button>
+        </div>
+        <canvas id="profile-canvas"></canvas>
+      </section>
+    </main>
+
+    <footer id="statusbar">
+      <span id="sb-coords">—</span>
+      <span id="sb-d96"></span>
+      <span class="sb-sep"></span>
+      <span id="sb-job"></span>
+      <span id="sb-zoom"></span>
+    </footer>
+  </div>
+
+  <div id="ctx-menu" class="ctx hidden"></div>
+  <div id="toasts"></div>
+
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

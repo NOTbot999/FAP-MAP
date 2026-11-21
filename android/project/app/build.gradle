@@ -1,0 +1,67 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Release signing key lives outside version control (android/keystore.properties)
+def keyProps = new Properties()
+def keyFile = rootProject.file('../keystore.properties')
+if (keyFile.exists()) keyFile.withInputStream { keyProps.load(it) }
+
+android {
+    namespace 'si.francmap.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'si.francmap.app'
+        minSdk 26
+        targetSdk 34
+        versionCode 11
+        versionName '1.5.5'
+    }
+
+    signingConfigs {
+        release {
+            if (keyFile.exists()) {
+                storeFile rootProject.file('../' + keyProps['storeFile'])
+                storePassword keyProps['storePassword']
+                keyAlias keyProps['keyAlias']
+                keyPassword keyProps['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig keyFile.exists() ? signingConfigs.release : signingConfigs.debug
+            resValue "string", "app_name", "Franc Map"
+        }
+        // Test version: installs next to the real app (own id, own data), named "Franc Map TEST"
+        //   gradle assembleBeta  →  app/build/outputs/apk/beta/app-beta.apk
+        beta {
+            initWith release
+            applicationIdSuffix ".test"
+            versionNameSuffix "-test"
+            resValue "string", "app_name", "Franc Map TEST"
+            matchingFallbacks = ['release']
+        }
+        debug {
+            resValue "string", "app_name", "Franc Map DEBUG"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    // The map UI is shared with the desktop app: package FrancMap/web as the APK's assets
+    sourceSets {
+        main.assets.srcDirs = ['../../../web']
+    }
+
+    aaptOptions {
+        // keep files like .gitignore out, but don't drop anything the UI needs
+        ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
+    }
+}
