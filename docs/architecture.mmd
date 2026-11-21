@@ -1,0 +1,113 @@
+---
+config:
+  layout: elk
+  elk:
+    considerModelOrder: NODES_AND_EDGES
+    forceNodeModelOrder: true
+    nodePlacementStrategy: BRANDES_KOEPF
+  theme: base
+  themeVariables:
+    clusterBkg: "#f8fafc"
+    clusterBorder: "#cbd5e1"
+    edgeLabelBackground: "#ffffff"
+    lineColor: "#64748b"
+---
+flowchart TB
+    %% ── Row 1: Explore and analyze (top) ──────────────────────────
+    subgraph Explore["Explore and analyze"]
+        direction TB
+        Special["Weather and map info<br/>[explore/special.js]"]
+        Search["Location search<br/>[explore/search.js]"]
+        Route["Route planner<br/>[explore/route.js]"]
+        Popup["Feature details<br/>[explore/popup.js]"]
+        POI["POI browser<br/>[explore/poi.js]"]
+        Profile["Elevation profiles<br/>[explore/profile.js]"]
+        Search -->|shows result| Popup
+        Search -->|searches loaded features| POI
+        Route -->|opens profile| Profile
+    end
+
+    User(("Map user"))
+
+    %% ── Row 2: External (left) · Create (centre) · Runtime (right) ─
+    subgraph Ext["External services · services/external.js"]
+        direction LR
+        Nominatim{{"Nominatim"}}
+        Overpass{{"Overpass API"}}
+        BRouter{{"BRouter"}}
+    end
+
+    subgraph Create["Create and record"]
+        direction TB
+        Offline["Offline area manager<br/>[create/offline.js]"]
+        Draw["Drawings and measures<br/>[create/draw.js]"]
+        Tracks["Track library and GPS<br/>[create/tracks.js]"]
+        GeoIO["Geospatial file exchange<br/>[create/geoio.js]"]
+        Draw & Tracks -->|import / export| GeoIO
+    end
+
+    subgraph Runtime["App runtime"]
+        direction TB
+        Main["Interface bootstrap<br/>[main.js]"]
+        App["Desktop host<br/>[app.py]"]
+        State["Settings and state<br/>[runtime/state.js]"]
+        Main -->|loads| State
+    end
+
+    %% ── Row 3: Map and layers ─────────────────────────────────────
+    subgraph MapL["Map and layers"]
+        direction TB
+        Layers["Layer controls<br/>[map/layers.js]"]
+        Compare["Layer comparison<br/>[map/compare.js]"]
+        Map["Map rendering<br/>[map/map.js]"]
+        Layers -->|controls| Map
+        Compare -->|compares| Map
+    end
+
+    %% ── Row 4: Persistence and services (bottom) ──────────────────
+    subgraph Svc["Persistence and services"]
+        direction TB
+        API["API adapter<br/>[services/api.js]"]
+        Web["Web backend<br/>[services/webbackend.js]"]
+        Cache[("Local cache and data<br/>[app.py]")]
+        API -->|web calls| Web
+        API -->|local service| Cache
+    end
+
+    %% Entry
+    User -->|uses| Main
+    User -->|launches| App
+    App -->|stores requests| Cache
+    Main -->|initializes| Map
+
+    %% Cross-module flows
+    Route -->|saves as drawing| Draw
+    Tracks -->|track stats| Profile
+
+    %% Everything that draws on the map
+    Route & POI & Draw & Tracks -->|render| Map
+
+    %% Calls to third-party services (all via services/external.js → api.js)
+    Search -->|queries| Nominatim
+    POI -->|category data| Overpass
+    Route -->|route geometry| BRouter
+
+    %% Everything that goes through api.js
+    Explore -->|geocode · route · map info · elevation| API
+    Create -->|persist features & tracks · offline downloads| API
+    State -->|load / save| API
+    Map -->|tiles| API
+    Map -->|tile URLs| Web
+
+    classDef explore fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef create fill:#ffe4e6,stroke:#e11d48,color:#881337
+    classDef map fill:#fef3c7,stroke:#d97706,color:#78350f
+    classDef runtime fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+    classDef svc fill:#e0e7ff,stroke:#4f46e5,color:#312e81
+    classDef ext fill:#f1f5f9,stroke:#64748b,color:#334155
+    class Search,Route,POI,Popup,Profile,Special explore
+    class Draw,Tracks,GeoIO,Offline create
+    class Layers,Compare,Map map
+    class User,App,Main,State runtime
+    class API,Web,Cache svc
+    class Nominatim,Overpass,BRouter ext

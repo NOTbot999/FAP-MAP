@@ -1,13 +1,13 @@
-import { state, saveSettings, emit, on } from "../state.js";
+import { state, saveSettings, emit, on } from "../runtime/state.js";
 
 // category emoji, honouring "Označba po izbiri" overrides from the settings menu
 export const emo = (cat) => state.settings.ui?.emoji?.[cat.id] || cat.emoji;
-import { map } from "../map.js";
-import { overpass } from "../api.js";
-import { esc, toast, fmtNum, fmtLatLng, toD96, $ } from "../util.js";
-import { icon } from "../icons.js";
-import { pointPopup } from "../popup.js";
-import { PointLayer } from "../pointlayer.js";
+import { map } from "../map/map.js";
+import { overpass } from "../services/external.js";
+import { esc, toast, fmtNum, fmtLatLng, toD96, $ } from "../shared/util.js";
+import { icon } from "../shared/icons.js";
+import { pointPopup } from "./popup.js";
+import { PointLayer } from "../map/pointlayer.js";
 
 const loaded = new Map();   // catId -> { features, layer }
 const loading = new Set();
