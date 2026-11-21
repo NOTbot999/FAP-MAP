@@ -17,7 +17,7 @@ All user data lives in `%LOCALAPPDATA%\FrancMap` (settings, drawings, projects, 
 ## Features
 
 - 8 base maps + 77 overlay layers (GURS, ARSO, OSM, Waymarked Trails, OpenRailwayMap…), drag to reorder, opacity, WMS legends, favourites, filter
-- 47 POI categories from OpenStreetMap (fast canvas rendering, cached for offline)
+- 41 POI categories (incl. fire hydrants) from OpenStreetMap (fast canvas rendering, cached for offline)
 - Search: places/addresses, loaded POIs, your drawings, WGS84 / DMS / **D96/TM** coordinates
 - Routing (BRouter): walk, bike, road bike, main roads, car; alternatives, draggable waypoints, climb, GPX export
 - Draw markers / lines / polygons, measure distance & area, edit vertices, notes, colours, named projects, GeoJSON / GPX / KML import & export

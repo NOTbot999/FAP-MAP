@@ -154,6 +154,9 @@ export function togglePoi(id, force) {
 }
 
 export function restorePois() {
+  // categories that no longer exist (removed from the list) are dropped from the saved selection
+  const known = new Set(state.db.pois.map((c) => c.id));
+  state.settings.pois = state.settings.pois.filter((id) => known.has(id));
   for (const id of state.settings.pois) showCategory(id);
 }
 
