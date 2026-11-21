@@ -36,7 +36,7 @@ BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 # folder and title, so they never touch the real app's settings, drawings or cache.
 IS_TEST = "--test" in sys.argv or ((BASE_DIR / "flavor.txt").exists() and (BASE_DIR / "flavor.txt").read_text().strip() == "test")
 APP_NAME = "FrancMapTest" if IS_TEST else "FrancMap"
-APP_VERSION = "1.5.8" + ("-test" if IS_TEST else "")
+APP_VERSION = "1.5.9" + ("-test" if IS_TEST else "")
 WEB_DIR = BASE_DIR / "web"
 # FRANCMAP_DATA: separate data folder (settings, cache) — for test/dev runs next to the installed app
 DATA_DIR = Path(os.environ["FRANCMAP_DATA"]) if os.environ.get("FRANCMAP_DATA") \
@@ -153,6 +153,8 @@ def build_upstream_url(cfg, z, x, y):
             "size": "256,256", "f": "image", "format": fmt,
             "transparent": "true" if transparent else "false",
         }
+        if cfg.get("layers"):   # e.g. "show:5664" — only these sub-layers of a big ArcGIS service
+            params["layers"] = cfg["layers"]
         return cfg["url"] + "?" + urlencode(params)
     return None
 
@@ -580,7 +582,7 @@ def check_layer(lid, cfg):
             detail = f"Ni odziva ({e.__class__.__name__})"
     if valid == 0:
         return {"status": "fail", "detail": detail or "Ni slike"}
-    if valid == blank:
+    if valid == blank and not cfg.get("sparse"):
         return {"status": "empty", "detail": "Vir vrača samo prazne slike"}
     return {"status": "ok"}
 

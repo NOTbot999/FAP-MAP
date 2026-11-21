@@ -48,7 +48,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * The web UI talks to it through the same /tiles/… and /api/… paths as on the desktop.
  */
 public class Backend {
-    static final String VERSION = "1.5.8";
+    static final String VERSION = "1.5.9";
     static final String UA = "FrancMapAndroid/" + VERSION + " (map viewer for Slovenia)";
     static final long TILE_MAX_AGE = 30L * 86400;
     static final long LIVE_TILE_MAX_AGE = 1800;
@@ -563,7 +563,8 @@ public class Backend {
             double[] b = sr == 4326 ? bounds4326(z, x, y) : bounds3857(z, x, y);
             return url + "?bbox=" + enc(String.format(Locale.ROOT, "%.8f,%.8f,%.8f,%.8f", b[0], b[1], b[2], b[3]))
                     + "&bboxSR=" + sr + "&imageSR=" + cfg.optInt("imageSR", sr) + "&size=256%2C256&f=image&format=" + fmt
-                    + "&transparent=" + transparent;
+                    + "&transparent=" + transparent
+                    + (cfg.optString("layers").isEmpty() ? "" : "&layers=" + enc(cfg.optString("layers")));   // sub-layer selection
         }
         return null;
     }
@@ -720,7 +721,7 @@ public class Backend {
             } catch (IOException e) { detail = "Ni odziva (" + e.getClass().getSimpleName() + ")"; }
         }
         if (valid == 0) return new JSONObject().put("status", "fail").put("detail", detail.isEmpty() ? "Ni slike" : detail);
-        if (valid == blank) return new JSONObject().put("status", "empty").put("detail", "Vir vrača samo prazne slike");
+        if (valid == blank && !cfg.optBoolean("sparse", false)) return new JSONObject().put("status", "empty").put("detail", "Vir vrača samo prazne slike");
         return new JSONObject().put("status", "ok");
     }
 
