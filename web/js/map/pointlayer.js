@@ -97,7 +97,8 @@ export const PointLayer = L.Layer.extend({
   },
 
   getEvents() {
-    const ev = { moveend: this._reset, zoomend: this._reset, resize: this._reset, viewreset: this._reset, zoom: this._onZoom };
+    // zoomend and moveend both fire after every zoom → _update skips the second, identical redraw
+    const ev = { moveend: this._update, zoomend: this._update, resize: this._update, viewreset: this._reset, zoom: this._onZoom };
     if (this._map.options.zoomAnimation) ev.zoomanim = this._onZoomAnim;
     return ev;
   },
@@ -114,9 +115,21 @@ export const PointLayer = L.Layer.extend({
     L.DomUtil.setTransform(this._canvas, off, scale);
   },
 
+  _viewKeyOf(map) {
+    const o = map.getPixelOrigin(), sz = map.getSize(), c = map.containerPointToLayerPoint([0, 0]);
+    return `${map.getZoom()}|${o.x},${o.y}|${sz.x},${sz.y}|${c.x},${c.y}|${window.devicePixelRatio}`;
+  },
+
+  _update() {
+    const map = this._map;
+    if (!map || !this._canvas) return;
+    if (this._viewKeyOf(map) !== this._viewKey) this._reset();
+  },
+
   _reset() {
     const map = this._map;
     if (!map || !this._canvas) return;
+    this._viewKey = this._viewKeyOf(map);
     const p = this.options.padding, size = map.getSize();
     const min = map.containerPointToLayerPoint(size.multiplyBy(-p)).round();
     const dim = size.multiplyBy(1 + p * 2).round();

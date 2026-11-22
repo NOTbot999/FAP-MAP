@@ -8,11 +8,14 @@ native WebView2 window via pywebview.
 """
 from __future__ import annotations
 
+import atexit
 import concurrent.futures as cf
+import gzip
 import hashlib
 import json
 import math
 import mimetypes
+import queue
 import os
 import re
 import secrets
@@ -175,6 +178,15 @@ class Cache:
         self.marker = self.file.with_name("cache.needs-repair")
         self.local = threading.local()
         self.wlock = threading.Lock()
+        # Tile writes go through one background writer that commits them in batches: a request
+        # thread no longer waits for the write lock + a commit before it can answer the browser,
+        # and many tiles share one transaction. Until flushed, tiles are served from _pending.
+        self._wq: queue.SimpleQueue = queue.SimpleQueue()
+        self._pending: dict = {}
+        self._plock = threading.Lock()
+        self._gen = 0                      # bumped by clear(): queued writes from before are dropped
+        self._idle = threading.Event()
+        self._idle.set()
         self.broken = False
         self.note = ""
         # One Franc Map process owns the cache. A second window/process (or a dev server running
@@ -226,6 +238,12 @@ class Cache:
         c = getattr(self.local, "c", None)
         if c is None:
             c = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
+            try:   # memory-mapped reads + a modest page cache per connection (one per server thread)
+                c.execute("PRAGMA mmap_size=268435456")
+                c.execute("PRAGMA cache_size=-4000")
+                c.execute("PRAGMA temp_store=MEMORY")
+            except sqlite3.DatabaseError:
+                pass
             self.local.c = c
         return c
 
@@ -313,22 +331,58 @@ class Cache:
 
     # ── reads / writes (all damage-tolerant) ──
     def get_tile(self, layer, z, x, y):
+        p = self._pending.get((layer, z, x, y))
+        if p is not None:
+            return p[0], p[1], p[2]
         return self._safe(lambda: self.conn().execute("SELECT data, ctype, ts FROM tiles WHERE layer=? AND z=? AND x=? AND y=?",
                                                       (layer, z, x, y)).fetchone())
 
     def has_tile(self, layer, z, x, y, max_age):
+        p = self._pending.get((layer, z, x, y))
+        if p is not None:
+            return time.time() - p[2] < max_age
         r = self._safe(lambda: self.conn().execute("SELECT ts FROM tiles WHERE layer=? AND z=? AND x=? AND y=?",
                                                    (layer, z, x, y)).fetchone())
         return r is not None and time.time() - r[0] < max_age
 
     def put_tile(self, layer, z, x, y, data, ctype):
-        def w():
-            with self.wlock:
-                c = self.conn()
-                c.execute("INSERT OR REPLACE INTO tiles VALUES(?,?,?,?,?,?,?)",
-                          (layer, z, x, y, sqlite3.Binary(data), ctype, int(time.time())))
-                c.commit()
-        self._safe(w)
+        if self.broken:
+            return
+        key, val = (layer, z, x, y), (data, ctype, int(time.time()))
+        with self._plock:
+            self._pending[key] = val
+            self._idle.clear()
+            if not getattr(self, "_writer", None):
+                self._writer = threading.Thread(target=self._write_loop, name="tile-writer", daemon=True)
+                self._writer.start()
+        self._wq.put((self._gen, key, val))
+
+    def _write_loop(self):
+        while True:
+            batch = [self._wq.get()]
+            while len(batch) < 500:
+                try:
+                    batch.append(self._wq.get_nowait())
+                except queue.Empty:
+                    break
+            def w():
+                with self.wlock:
+                    rows = [(*k, sqlite3.Binary(v[0]), v[1], v[2]) for g, k, v in batch if g == self._gen]
+                    if rows:
+                        c = self.conn()
+                        c.executemany("INSERT OR REPLACE INTO tiles VALUES(?,?,?,?,?,?,?)", rows)
+                        c.commit()
+            self._safe(w)
+            with self._plock:
+                for _, k, v in batch:
+                    if self._pending.get(k) is v:
+                        del self._pending[k]
+                if self._wq.empty():
+                    self._idle.set()
+
+    def flush(self, timeout=10):
+        """Wait until queued tile writes are in the database."""
+        self._idle.wait(timeout)
 
     def get_http(self, key):
         return self._safe(lambda: self.conn().execute("SELECT data, ctype, ts FROM http WHERE key=?", (key,)).fetchone())
@@ -342,6 +396,7 @@ class Cache:
         self._safe(w)
 
     def stats(self):
+        self.flush(2)
         def q():
             c = self.conn()
             rows = c.execute("SELECT layer, COUNT(*), SUM(LENGTH(data)) FROM tiles GROUP BY layer").fetchall()
@@ -359,6 +414,11 @@ class Cache:
     def clear(self, layer=None, what="tiles"):
         def w():
             with self.wlock:
+                if what != "http":
+                    self._gen += 1   # writes still queued from before the clear are dropped
+                    with self._plock:
+                        for k in [k for k in self._pending if not layer or k[0] == layer]:
+                            del self._pending[k]
                 c = self.conn()
                 if what == "http":
                     c.execute("DELETE FROM http")
@@ -372,6 +432,7 @@ class Cache:
 
 
 CACHE = Cache(DATA_DIR / "cache.sqlite")
+atexit.register(CACHE.flush, 5)   # don't lose the last few downloaded tiles when the window closes
 
 
 def purge_stale_tiles():
@@ -789,9 +850,35 @@ TILE_PATH = re.compile(r"^/tiles/([\w\-]+)/(\d+)/(\d+)/(\d+)(?:\.\w+)?$")
 ALLOWED_HOST = re.compile(r"^(?:[a-z0-9\-]+\.)?localhost(?::\d+)?$|^127\.0\.0\.1(?::\d+)?$|^\[::1\](?::\d+)?$")
 
 
+_STATIC: dict = {}
+_STATIC_LOCK = threading.Lock()
+
+
+def static_file(target: Path) -> dict:
+    """UI file with its ETag and a gzipped copy (text only), kept in memory until it changes on disk."""
+    st = target.stat()
+    sig = (st.st_mtime_ns, st.st_size)
+    f = _STATIC.get(target)
+    if f and f["sig"] == sig:
+        return f
+    raw = target.read_bytes()
+    ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+    text = ctype.startswith("text/") or ctype.endswith(("javascript", "json", "xml", "svg+xml"))
+    if text:
+        ctype += "; charset=utf-8"
+    gz = gzip.compress(raw, 6, mtime=0) if text and len(raw) > 1024 else None
+    f = {"sig": sig, "raw": raw, "gz": gz, "ctype": ctype, "etag": f'"{sig[0]:x}-{sig[1]:x}"'}
+    with _STATIC_LOCK:
+        _STATIC[target] = f
+    return f
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "FrancMap"
+    # Headers and body used to leave as two small writes; with Nagle + delayed ACK every response
+    # (each map tile!) then stalled ~40 ms on localhost. Send immediately, and in one write.
+    disable_nagle_algorithm = True
 
     def log_message(self, fmt, *args):  # quiet
         pass
@@ -805,9 +892,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         for k, v in (headers or {}).items():
             self.send_header(k, v)
-        self.end_headers()
         if self.command != "HEAD":
-            self.wfile.write(body)
+            self._headers_buffer.append(b"\r\n")
+            self._headers_buffer.append(body)
+            self.wfile.write(b"".join(self._headers_buffer))
+            self._headers_buffer = []
+        else:
+            self.end_headers()
 
     def json(self, obj, code=200):
         self.send(code, json.dumps(obj, ensure_ascii=False), "application/json; charset=utf-8",
@@ -882,10 +973,14 @@ class Handler(BaseHTTPRequestHandler):
         target = (WEB_DIR / path.lstrip("/")).resolve()
         if WEB_DIR.resolve() not in target.parents or not target.is_file():
             return self.send(404, b"not found", "text/plain")
-        ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
-        if ctype.startswith("text/") or ctype.endswith("javascript") or ctype.endswith("json"):
-            ctype += "; charset=utf-8"
-        self.send(200, target.read_bytes(), ctype, {"Cache-Control": "no-cache"})
+        f = static_file(target)
+        # "no-cache" = the WebView revalidates every start; an unchanged file then costs a 304, not a re-read
+        hdr = {"Cache-Control": "no-cache", "ETag": f["etag"], "Vary": "Accept-Encoding"}
+        if self.headers.get("If-None-Match") == f["etag"]:
+            return self.send(304, b"", f["ctype"], hdr)
+        if f["gz"] is not None and "gzip" in (self.headers.get("Accept-Encoding") or ""):
+            return self.send(200, f["gz"], f["ctype"], {**hdr, "Content-Encoding": "gzip"})
+        self.send(200, f["raw"], f["ctype"], hdr)
 
     def api_get(self, path, qs):
         q = lambda k, d=None: qs.get(k, [d])[0]
