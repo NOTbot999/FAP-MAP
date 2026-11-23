@@ -134,7 +134,9 @@ class NapProxy:
             if r.status_code == 401:                # token expired / revoked → renew once and retry
                 r = self._get(code, self._ensure_token(force=True))
             if r.status_code != 200:
-                msg = {403: "ni dostopa do nabora (zaprosi za dostop na nap.si)", 404: "nabor ne obstaja (preveri kodo)"}.get(r.status_code, f"NAP HTTP {r.status_code}")
+                msg = {401: "prijava deluje, dostop do nabora pa še ni odobren (nap.si → profil → Pravice)",
+                       403: "ni dostopa do nabora ali napačna koda (preveri kodo in Pravice na nap.si)",
+                       404: "nabor ne obstaja (preveri kodo)"}.get(r.status_code, f"NAP HTTP {r.status_code}")
                 return r.status_code, json.dumps({"error": msg, "status": r.status_code}).encode(), "application/json"
             out = (200, r.content, r.headers.get("Content-Type", "application/json").split(";")[0])
             self.cache[key] = (time.time(), *out)

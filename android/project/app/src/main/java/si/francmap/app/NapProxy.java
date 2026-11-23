@@ -154,7 +154,9 @@ class NapProxy {
             if (h.status == 405) h = get(code, ensureToken(false), "POST");
             if (h.status == 401) h = get(code, ensureToken(true), "GET");
             if (h.status != 200) {
-                String msg = h.status == 403 ? "ni dostopa do nabora (zaprosi za dostop na nap.si)" : h.status == 404 ? "nabor ne obstaja (preveri kodo)" : "NAP HTTP " + h.status;
+                String msg = h.status == 401 ? "prijava deluje, dostop do nabora pa še ni odobren (nap.si → profil → Pravice)"
+                        : h.status == 403 ? "ni dostopa do nabora ali napačna koda (preveri kodo in Pravice na nap.si)"
+                        : h.status == 404 ? "nabor ne obstaja (preveri kodo)" : "NAP HTTP " + h.status;
                 return err(h.status, msg);
             }
             String ct = h.ctype.isEmpty() ? "application/json" : h.ctype;
