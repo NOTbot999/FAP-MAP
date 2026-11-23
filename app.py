@@ -30,13 +30,14 @@ from urllib.parse import parse_qs, urlencode, urlparse
 import requests
 
 import collab_server
+import nap_proxy
 
 BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 # Test builds (build-test.bat bundles flavor.txt = "test", or run with --test) keep their own data
 # folder and title, so they never touch the real app's settings, drawings or cache.
 IS_TEST = "--test" in sys.argv or ((BASE_DIR / "flavor.txt").exists() and (BASE_DIR / "flavor.txt").read_text().strip() == "test")
 APP_NAME = "FrancMapTest" if IS_TEST else "FrancMap"
-APP_VERSION = "1.6.4" + ("-test" if IS_TEST else "")
+APP_VERSION = "1.7.0" + ("-test" if IS_TEST else "")
 WEB_DIR = BASE_DIR / "web"
 # FRANCMAP_DATA: separate data folder (settings, cache) — for test/dev runs next to the installed app
 DATA_DIR = Path(os.environ["FRANCMAP_DATA"]) if os.environ.get("FRANCMAP_DATA") \
@@ -889,6 +890,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_get(self, path, qs):
         q = lambda k, d=None: qs.get(k, [d])[0]
+        if path == "/api/nap/status":          # "Promet v živo": which datasets are set up (never the password)
+            return self.json(get_nap().status())
+        if path == "/api/nap/data":            # napProxy: ?sloj=<key from nap_datasets.json>
+            status, body, ctype = get_nap().fetch(q("sloj", ""))
+            return self.send(status, body, ctype, {"Cache-Control": "no-store"})
         if path == "/api/status":
             job = OfflineJob.current
             return self.json({"online": NetState.online(), "forcedOffline": NetState.forced_offline,
@@ -920,6 +926,12 @@ class Handler(BaseHTTPRequestHandler):
         return self.json({"error": "unknown endpoint"}, 404)
 
     def api_post(self, path, p):
+        if path == "/api/nap/codes":
+            get_nap().set_codes((p or {}).get("codes", {}))
+            return self.json(get_nap().status())
+        if path == "/api/nap/credentials":     # stored outside the app's readable store; env NAP_USER/NAP_PASS win
+            get_nap().set_credentials((p or {}).get("user", "").strip(), (p or {}).get("pass", ""))
+            return self.json(get_nap().status())
         if path == "/api/overpass":
             data, status, src = overpass(p.get("query", ""), int(p.get("ttl", 7 * 86400)))
             return self.send(status, data, "application/json", {"X-Source": src})
@@ -999,6 +1011,16 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False
     request_queue_size = 128
+
+
+_NAP = None
+
+
+def get_nap():
+    global _NAP
+    if _NAP is None:
+        _NAP = nap_proxy.NapProxy(WEB_DIR, DATA_DIR, STORE_DIR, http_session())
+    return _NAP
 
 
 def start_servers():

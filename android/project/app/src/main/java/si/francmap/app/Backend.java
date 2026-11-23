@@ -48,7 +48,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * The web UI talks to it through the same /tiles/… and /api/… paths as on the desktop.
  */
 public class Backend {
-    static final String VERSION = "1.6.4";
+    static final String VERSION = "1.7.0";
     static final String UA = "FrancMapAndroid/" + VERSION + " (map viewer for Slovenia)";
     static final long TILE_MAX_AGE = 30L * 86400;
     static final long LIVE_TILE_MAX_AGE = 1800;
@@ -74,6 +74,8 @@ public class Backend {
     final ExecutorService io = Executors.newFixedThreadPool(8);
     final ExecutorService refreshPool = Executors.newFixedThreadPool(3);
     final Set<String> refreshing = Collections.synchronizedSet(new HashSet<>());
+    private NapProxy napProxy;
+    synchronized NapProxy nap() { if (napProxy == null) napProxy = new NapProxy(this); return napProxy; }
 
     volatile boolean forcedOffline = false;
     volatile long lastOk = 0, lastFail = 0;
@@ -215,6 +217,8 @@ public class Backend {
                         return Resp.json(200, o);
                     }
                     case "/api/cache/stats": return Resp.json(200, stats());
+                    case "/api/nap/status": return Resp.json(200, nap().status());          // "Promet v živo" (never the password)
+                    case "/api/nap/data": return nap().fetch(u.getQueryParameter("sloj"));  // napProxy (whitelist)
                     case "/api/offline/status": return Resp.json(200, job == null ? "null" : job.status());
                 }
                 if (path.startsWith("/api/store/")) {
@@ -230,6 +234,8 @@ public class Backend {
             Object parsed = body == null || body.isEmpty() ? JSONObject.NULL : new org.json.JSONTokener(body).nextValue();
             JSONObject p = parsed instanceof JSONObject ? (JSONObject) parsed : new JSONObject();
             if (path.equals("/api/overpass")) return overpass(p.optString("query", ""), p.optLong("ttl", 7 * 86400));
+            if (path.equals("/api/nap/codes")) { nap().setCodes(p.optJSONObject("codes")); return Resp.json(200, nap().status()); }
+            if (path.equals("/api/nap/credentials")) { nap().setCredentials(p.optString("user", "").trim(), p.optString("pass", "")); return Resp.json(200, nap().status()); }
             if (path.startsWith("/api/store/")) {
                 String name = path.substring("/api/store/".length());
                 if (!name.matches("[a-z0-9_\\-]{1,64}")) return Resp.json(400, "{\"error\":\"bad name\"}");
