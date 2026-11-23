@@ -37,7 +37,7 @@ BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 # folder and title, so they never touch the real app's settings, drawings or cache.
 IS_TEST = "--test" in sys.argv or ((BASE_DIR / "flavor.txt").exists() and (BASE_DIR / "flavor.txt").read_text().strip() == "test")
 APP_NAME = "FrancMapTest" if IS_TEST else "FrancMap"
-APP_VERSION = "1.7.0" + ("-test" if IS_TEST else "")
+APP_VERSION = "1.7.1" + ("-test" if IS_TEST else "")
 WEB_DIR = BASE_DIR / "web"
 # FRANCMAP_DATA: separate data folder (settings, cache) — for test/dev runs next to the installed app
 DATA_DIR = Path(os.environ["FRANCMAP_DATA"]) if os.environ.get("FRANCMAP_DATA") \
@@ -448,20 +448,82 @@ def fetch_tile(layer_id, z, x, y, allow_network=True):
     return download_tile(layer_id, cfg, z, x, y)
 
 
+# Hedged tile requests. Some map servers (notably GURS ipi.eprostor.gov.si) send part of the
+# requests to a node that hangs ~30 s and then answers 504, while the very same tile asked again
+# comes back in 0.1 s. One stuck request used to hold a browser connection for 20 s, so the map
+# filled with holes and even other layers (OSM) stalled. Now: if a tile isn't back within
+# HEDGE_AFTER seconds (or failed), fire another attempt in parallel; the first good image wins.
+HEDGE_AFTER = 1.0
+_hedge_pool = cf.ThreadPoolExecutor(max_workers=64, thread_name_prefix="tile")
+_inflight: dict = {}                    # (layer, z, x, y) → Future shared by duplicate requests
+_inflight_lock = threading.Lock()
+
+
+def _tile_attempt(url):
+    """→ (data, ctype) | ("http", status) | None (network error)"""
+    try:
+        r = http_session().get(url, timeout=(6, 15))
+    except requests.RequestException:
+        return None
+    ctype = r.headers.get("Content-Type", "").split(";")[0].strip()
+    if r.status_code == 200 and ctype.startswith("image/") and r.content:
+        return r.content, ctype
+    return "http", r.status_code
+
+
+def _hedged_get(url, max_tries):
+    pending, tries, answered = set(), 0, False
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if tries < max_tries:
+            pending.add(_hedge_pool.submit(_tile_attempt, url))
+            tries += 1
+        if not pending:
+            break
+        done, pending = cf.wait(pending, timeout=HEDGE_AFTER if tries < max_tries else max(0.1, deadline - time.time()),
+                                return_when=cf.FIRST_COMPLETED)
+        for f in done:
+            res = f.result()
+            if res is None:
+                continue
+            answered = True
+            if res[0] != "http":
+                return res, True
+            if res[1] in (400, 401, 403, 404):       # a real "no" from the server — asking again won't help
+                return None, True
+    return None, answered
+
+
 def download_tile(layer_id, cfg, z, x, y):
     url = build_upstream_url(cfg, z, x, y)
     if not url:
         return None
+    key = (layer_id, z, x, y)
+    with _inflight_lock:
+        fut = _inflight.get(key)
+        owner = fut is None
+        if owner:
+            fut = cf.Future()
+            _inflight[key] = fut
+    if not owner:                                     # the same tile is already on its way
+        try:
+            return fut.result(timeout=40)
+        except Exception:  # noqa: BLE001
+            return None
+    out = None
     try:
-        r = http_session().get(url, timeout=(6, 20))
-        NetState.ok()
-        ctype = r.headers.get("Content-Type", "").split(";")[0].strip()
-        if r.status_code == 200 and ctype.startswith("image/") and r.content:
-            CACHE.put_tile(layer_id, z, x, y, r.content, ctype)
-            return r.content, ctype, "net"
-    except requests.RequestException:
-        NetState.fail()
-    return None
+        tries = cfg.get("hedge") or (6 if cfg.get("type") in ("wms", "arcgis_export") else 2)
+        res, answered = _hedged_get(url, tries)
+        NetState.ok() if answered else NetState.fail()
+        if res:
+            data, ctype = res
+            CACHE.put_tile(layer_id, z, x, y, data, ctype)
+            out = data, ctype, "net"
+    finally:
+        fut.set_result(out)
+        with _inflight_lock:
+            _inflight.pop(key, None)
+    return out
 
 
 _refresh_pool = cf.ThreadPoolExecutor(max_workers=4)

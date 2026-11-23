@@ -48,7 +48,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * The web UI talks to it through the same /tiles/… and /api/… paths as on the desktop.
  */
 public class Backend {
-    static final String VERSION = "1.7.0";
+    static final String VERSION = "1.7.1";
     static final String UA = "FrancMapAndroid/" + VERSION + " (map viewer for Slovenia)";
     static final long TILE_MAX_AGE = 30L * 86400;
     static final long LIVE_TILE_MAX_AGE = 1800;
@@ -486,20 +486,59 @@ public class Backend {
         return downloadTile(id, cfg, z, x, y);
     }
 
+    // Hedged tile requests (same as app.py): some servers (GURS ipi.eprostor.gov.si) route part of the
+    // requests to a node that hangs ~30 s and answers 504, while the same tile asked again returns in
+    // 0.1 s. If a tile isn't back within HEDGE_AFTER_MS (or failed), another attempt runs in parallel;
+    // the first good image wins. Duplicate requests for one tile share a single download.
+    static final long HEDGE_AFTER_MS = 1000;
+    final ExecutorService hedgePool = Executors.newFixedThreadPool(48);
+    final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CompletableFuture<Resp>> inflight = new java.util.concurrent.ConcurrentHashMap<>();
+
     Resp downloadTile(String id, JSONObject cfg, int z, int x, int y) {
         String url = buildUrl(cfg, z, x, y);
         if (url == null) return null;
-        try {
-            Http h = httpGet(url, 6000, 20000);
-            lastOk = System.currentTimeMillis();
-            if (h.status == 200 && h.ctype.startsWith("image/") && h.data.length > 0) {
-                putTile(id, z, x, y, h.data, h.ctype);
-                Resp r = new Resp(200, h.ctype, h.data); r.source = "net"; return r;
-            }
-        } catch (IOException e) {
-            lastFail = System.currentTimeMillis();
+        String key = id + "/" + z + "/" + x + "/" + y;
+        java.util.concurrent.CompletableFuture<Resp> mine = new java.util.concurrent.CompletableFuture<>();
+        java.util.concurrent.CompletableFuture<Resp> other = inflight.putIfAbsent(key, mine);
+        if (other != null) {
+            try { return other.get(40, TimeUnit.SECONDS); } catch (Exception e) { return null; }
         }
-        return null;
+        Resp out = null;
+        try {
+            String type = cfg.optString("type");
+            int maxTries = cfg.optInt("hedge", type.equals("wms") || type.equals("arcgis_export") ? 6 : 2);
+            ExecutorCompletionService<Http> ecs = new ExecutorCompletionService<>(hedgePool);
+            int tries = 0, running = 0;
+            boolean answered = false;
+            long deadline = System.currentTimeMillis() + 30000;
+            outer:
+            while (System.currentTimeMillis() < deadline) {
+                if (tries < maxTries) { ecs.submit(() -> httpGet(url, 6000, 15000)); tries++; running++; }
+                if (running == 0) break;
+                long wait = tries < maxTries ? HEDGE_AFTER_MS : Math.max(100, deadline - System.currentTimeMillis());
+                Future<Http> f = ecs.poll(wait, TimeUnit.MILLISECONDS);
+                while (f != null) {
+                    running--;
+                    try {
+                        Http h = f.get();
+                        answered = true;
+                        if (h.status == 200 && h.ctype.startsWith("image/") && h.data.length > 0) {
+                            putTile(id, z, x, y, h.data, h.ctype);
+                            out = new Resp(200, h.ctype, h.data); out.source = "net";
+                            break outer;
+                        }
+                        if (h.status == 400 || h.status == 401 || h.status == 403 || h.status == 404) break outer;
+                    } catch (Exception ignored) { }   // network error on this attempt
+                    f = ecs.poll();
+                }
+            }
+            if (answered) lastOk = System.currentTimeMillis(); else lastFail = System.currentTimeMillis();
+        } catch (InterruptedException ignored) {
+        } finally {
+            mine.complete(out);
+            inflight.remove(key, mine);
+        }
+        return out;
     }
 
     static double[] bounds3857(int z, int x, int y) {
