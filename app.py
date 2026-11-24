@@ -897,7 +897,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_HEAD(self):
         self.do_GET()
 
+    last_request = time.time()          # browser fallback: stop when nobody uses the app any more
+
     def do_GET(self):
+        Handler.last_request = time.time()
         if not self.guard():
             return
         u = urlparse(self.path)
@@ -1166,12 +1169,69 @@ def main():
                 time.sleep(3600)
         except KeyboardInterrupt:
             return
-    import webview
-    api = JsApi()
-    win = webview.create_window("Franc Map TEST" if IS_TEST else "Franc Map", url, width=1440, height=900, min_size=(820, 560),
-                                js_api=api, background_color="#0f172a", text_select=True)
-    api._window = win
-    webview.start(private_mode=False, storage_path=str(DATA_DIR / "webview"), debug="--debug" in sys.argv)
+    unblock_downloaded_files()
+    if "--browser" in sys.argv:        # run in an Edge app window instead of the native one
+        return open_in_browser_window(url)
+    try:
+        import webview
+        api = JsApi()
+        win = webview.create_window("Franc Map TEST" if IS_TEST else "Franc Map", url, width=1440, height=900, min_size=(820, 560),
+                                    js_api=api, background_color="#0f172a", text_select=True)
+        api._window = win
+        webview.start(private_mode=False, storage_path=str(DATA_DIR / "webview"), debug="--debug" in sys.argv)
+    except Exception as e:  # noqa: BLE001 — never leave the user with a crash dialog
+        print("native window failed, using Edge app window:", repr(e), flush=True)
+        open_in_browser_window(url)
+
+
+def unblock_downloaded_files():
+    """Files unpacked from a downloaded zip carry Windows' "Mark of the Web" (Zone.Identifier stream).
+    .NET then refuses to load pythonnet's Python.Runtime.dll and the window can't open
+    ("Failed to resolve Python.Runtime.Loader.Initialize"). Remove the mark from our own files."""
+    if os.name != "nt" or not getattr(sys, "frozen", False):
+        return
+    for root, _dirs, files in os.walk(BASE_DIR):
+        for name in files:
+            if name.lower().endswith((".dll", ".pyd", ".exe")):
+                try:
+                    os.remove(os.path.join(root, name) + ":Zone.Identifier")
+                except OSError:
+                    pass
+
+
+def open_in_browser_window(url):
+    """Fallback without pywebview: Microsoft Edge in app mode (own window, no tabs/address bar).
+    The app keeps running while that window is open; without Edge, the default browser is used and
+    the server stops after 2 hours without any request."""
+    import subprocess
+    import webbrowser
+    candidates = [Path(os.environ.get(v, "")) / "Microsoft" / "Edge" / "Application" / "msedge.exe"
+                  for v in ("ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA")]
+    edge = next((str(p) for p in candidates if p.is_file()), None)
+    if edge:
+        profile = DATA_DIR / "edge-app"
+        p = subprocess.Popen([edge, f"--app={url}", f"--user-data-dir={profile}", "--window-size=1440,900",
+                              "--no-first-run", "--no-default-browser-check"])
+        p.wait()
+        # Edge may hand the window to an already running instance of the same profile and exit at once
+        while _edge_profile_running(profile):
+            time.sleep(2)
+        return
+    webbrowser.open(url)
+    while time.time() - Handler.last_request < 7200:
+        time.sleep(30)
+
+
+def _edge_profile_running(profile):
+    """True while any msedge.exe uses our profile folder (Windows: the lock file is held open)."""
+    lock = Path(profile) / "lockfile"
+    if not lock.exists():
+        return False
+    try:
+        lock.unlink()           # succeeds only when no Edge process holds it any more
+        return False
+    except OSError:
+        return True
 
 
 if __name__ == "__main__":
