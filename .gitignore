@@ -16,3 +16,5 @@ android/project/local.properties
 site/
 build-test/
 dist-test/
+dist-onefile/
+build-onefile/
