@@ -5,12 +5,12 @@
 // Source tiles go through the app's cached /api/fetch, so viewed areas also work offline.
 import { proxiedImage } from "../services/api.js";
 import { toD96 } from "../shared/util.js";
+import { SI_TILE_BOUNDS } from "../runtime/state.js";
 
-const SI_BOUNDS = L.latLngBounds([[45.25, 13.2], [46.98, 16.75]]);
 // GeoHub cache grid (all TEMELJNE_KARTE services share it)
 const ORIGIN_E = -5122600, ORIGIN_N = 5001100, RES0 = 138718.1441029549, TS = 256;
 
-// Neighbouring map tiles share source tiles → keep the decoded images for a while
+// Neighbouring map tiles share source tiles at their seams → keep recently decoded images briefly
 const images = new Map();   // url -> Promise<HTMLImageElement|null>
 function loadImage(url) {
   let p = images.get(url);
@@ -23,36 +23,36 @@ function loadImage(url) {
     img.src = url;
   });
   images.set(url, p);
-  if (images.size > 400) images.delete(images.keys().next().value);
+  if (images.size > 96) images.delete(images.keys().next().value);
   return p;
 }
 
 const D96TileLayer = L.GridLayer.extend({
   createTile(coords, done) {
     const canvas = document.createElement("canvas");
-    const scale = Math.min(2, window.devicePixelRatio || 1);
+    // a pinned cache level has fixed detail → a hi-dpi canvas would only add memory, not sharpness
+    const scale = this.options.cfg.level != null ? 1 : Math.min(2, window.devicePixelRatio || 1);
     canvas.width = canvas.height = TS * scale;
-    this._draw(canvas, coords, scale).then(() => done(null, canvas), (e) => done(e, canvas));
+    this._draw(canvas, coords).then(() => done(null, canvas), (e) => done(e, canvas));
     return canvas;
   },
 
-  async _draw(canvas, coords, scale) {
+  async _draw(canvas, coords) {
     const cfg = this.options.cfg;
-    const crs = L.CRS.EPSG3857, z = coords.z;
+    const W = canvas.width, z = coords.z;
     const corner = (dx, dy) => {
-      const ll = crs.pointToLatLng(L.point((coords.x + dx) * TS, (coords.y + dy) * TS), z);
+      const ll = this._map.unproject(L.point((coords.x + dx) * TS, (coords.y + dy) * TS), z);
       return toD96(ll.lat, ll.lng);
     };
     const nw = corner(0, 0), ne = corner(1, 0), sw = corner(0, 1), se = corner(1, 1);
-    const groundRes = Math.hypot(ne.e - nw.e, ne.n - nw.n) / TS;          // metres per map pixel
-    // source level whose pixels are about as big as the screen's (a bit sharper on hi-dpi)
     // cfg.level pins one cache level: GeoHub's "Topografska karta" holds a different map per level
-    // (DTK50 at 14, colour DTK25 at 15, vector map from 16) and we want DTK25 at every zoom
-    const level = cfg.level ?? Math.max(0, Math.min(cfg.maxLevel ?? 17, Math.round(Math.log2(RES0 * scale / groundRes))));
+    // (DTK50 at 14, colour DTK25 at 15, vector map from 16) and we want DTK25 at every zoom.
+    // Otherwise pick the level whose pixels are about as big as the canvas's.
+    const groundRes = Math.hypot(ne.e - nw.e, ne.n - nw.n) / W;          // metres per canvas pixel
+    const level = cfg.level ?? Math.min(cfg.maxLevel ?? 17, Math.round(Math.log2(RES0 / groundRes)));
     const res = RES0 / 2 ** level, span = res * TS;
 
     // D96 → canvas pixel: solve M·(NE−NW) = (W,0), M·(SW−NW) = (0,W)
-    const W = TS * scale;
     const ux = ne.e - nw.e, uy = ne.n - nw.n, vx = sw.e - nw.e, vy = sw.n - nw.n;
     const det = ux * vy - vx * uy;
     const m00 = W * vy / det, m01 = -W * vx / det, m10 = -W * uy / det, m11 = W * ux / det;
@@ -60,7 +60,7 @@ const D96TileLayer = L.GridLayer.extend({
     const es = [nw.e, ne.e, sw.e, se.e], ns = [nw.n, ne.n, sw.n, se.n];
     const c0 = Math.floor((Math.min(...es) - ORIGIN_E) / span), c1 = Math.floor((Math.max(...es) - ORIGIN_E) / span);
     const r0 = Math.floor((ORIGIN_N - Math.max(...ns)) / span), r1 = Math.floor((ORIGIN_N - Math.min(...ns)) / span);
-    if ((c1 - c0 + 1) * (r1 - r0 + 1) > 36) return;   // a pinned level below its minZoom; guards a runaway request
+    if ((c1 - c0 + 1) * (r1 - r0 + 1) > 36) return;   // a pinned level far below its minZoom; guards a runaway request
 
     const jobs = [];
     for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
@@ -87,11 +87,12 @@ export function createD96TileLayer(cfg, opacity) {
     opacity: opacity ?? cfg.opacity ?? 1,
     minZoom: cfg.minZoom || 0,
     maxZoom: 20,
-    bounds: SI_BOUNDS,
+    // past the source's detail Leaflet just scales the last drawn tiles instead of re-projecting
+    maxNativeZoom: cfg.level != null ? 16 : 18,
+    bounds: L.latLngBounds(SI_TILE_BOUNDS),
     keepBuffer: 2,
     updateWhenIdle: false,
     updateWhenZooming: false,
     attribution: cfg.attribution || "",
-    className: cfg.className || "",
   });
 }
