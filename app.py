@@ -37,7 +37,7 @@ BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 # folder and title, so they never touch the real app's settings, drawings or cache.
 IS_TEST = "--test" in sys.argv or ((BASE_DIR / "flavor.txt").exists() and (BASE_DIR / "flavor.txt").read_text().strip() == "test")
 APP_NAME = "FrancMapTest" if IS_TEST else "FrancMap"
-APP_VERSION = "1.7.3" + ("-test" if IS_TEST else "")
+APP_VERSION = "1.7.4" + ("-test" if IS_TEST else "")
 WEB_DIR = BASE_DIR / "web"
 # FRANCMAP_DATA: separate data folder (settings, cache) — for test/dev runs next to the installed app
 DATA_DIR = Path(os.environ["FRANCMAP_DATA"]) if os.environ.get("FRANCMAP_DATA") \
