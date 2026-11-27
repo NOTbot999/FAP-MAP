@@ -48,14 +48,14 @@ import java.util.concurrent.atomic.AtomicInteger;
  * The web UI talks to it through the same /tiles/… and /api/… paths as on the desktop.
  */
 public class Backend {
-    static final String VERSION = "1.7.5";
+    static final String VERSION = "1.7.6";
     static final String UA = "FrancMapAndroid/" + VERSION + " (map viewer for Slovenia)";
     static final long TILE_MAX_AGE = 30L * 86400;
     static final long LIVE_TILE_MAX_AGE = 1800;
     static final int MAX_BULK_TILES = 60000;
     static final String[] ALLOWED_FETCH_HOSTS = {
             "nominatim.openstreetmap.org", "brouter.de", "router.project-osrm.org", "api.adsb.lol",
-            "api.open-meteo.com", "ipi.eprostor.gov.si", "gis.arso.gov.si", "rkg.gov.si", "bio.discomap.eea.europa.eu", "api.rainviewer.com"};
+            "api.open-meteo.com", "ipi.eprostor.gov.si", "gis.arso.gov.si", "rkg.gov.si", "bio.discomap.eea.europa.eu", "api.rainviewer.com", "geohub.gov.si"};
     static final String[] OVERPASS_MIRRORS = {
             "https://overpass-api.de/api/interpreter",
             "https://overpass.private.coffee/api/interpreter",
