@@ -48,7 +48,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * The web UI talks to it through the same /tiles/… and /api/… paths as on the desktop.
  */
 public class Backend {
-    static final String VERSION = "1.7.6";
+    static final String VERSION = "1.7.7";
     static final String UA = "FrancMapAndroid/" + VERSION + " (map viewer for Slovenia)";
     static final long TILE_MAX_AGE = 30L * 86400;
     static final long LIVE_TILE_MAX_AGE = 1800;
